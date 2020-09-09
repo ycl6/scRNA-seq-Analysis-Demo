@@ -286,48 +286,40 @@ rowData(sce)$Symbol[is.mito]
 #' 
 #' With an older version of `scater`, we would use the `calculateQCMetrics` function to add QC metrics, but it is now deprecated. We will instead use `addPerCellQC` and `addPerFeatureQC` and add additional metrics to `colData` and `rowData` instead.
 #' 
-#' First, we define a `addQCMetrics` function so it can be re-used to add per-cell and per-feature stats in the future.
+#' ### Add per-cell QC
 #' 
-## ----create-addQCMetrics-func-------------------------------------------------
-addQCMetrics <- function(x, subsets = NULL, pseudo = NULL) {
-        ifelse(is.null(pseudo), 0, pseudo)
+## ----add-per-cell-qc-to-sce---------------------------------------------------
+# "sum" - sum of counts for the cell (library size)
+# "detected" - number of genes for the cell that have counts above the detection limit (default 0)
+sce <- addPerCellQC(sce, list(MT = is.mito))
 
-        # Per-cell QC
-        x <- addPerCellQC(x, subsets = subsets)
-
-        # Add additional stats to per-cell QC
-        colData(x)$log10_sum <- log10(colData(x)$sum + pseudo)
-        colData(x)$log10_detected <- log10(colData(x)$detected + pseudo)
-        colData(x)$log10_genes_per_umi <- colData(x)$log10_sum / colData(x)$log10_detected
-
-        # Per-feature QC
-        x <- addPerFeatureQC(x)
-
-        # Add additional stats to per-feature QC
-        rowData(x)$is_MT <- FALSE
-        rowData(x)$is_MT[is.mito] <- TRUE
-        rowData(x)$log10_mean <- log10(rowData(x)$mean + pseudo)
-        rowData(x)$n_cells_by_counts <- nexprs(x, byrow = TRUE)
-        rowData(x)$pct_dropout_by_counts <- 100 - rowData(x)$detected
-        rowData(x)$total_counts <- rowData(x)$mean * ncol(x)
-        rowData(x)$log10_total_counts <- log10(rowData(x)$total_counts + pseudo)
-
-        return(x)
-}
+# Add additional stats to per-cell QC
+colData(sce)$log10_sum <- log10(colData(sce)$sum + pseudocount)
+colData(sce)$log10_detected <- log10(colData(sce)$detected + pseudocount)
+colData(sce)$log10_genes_per_umi <- colData(sce)$log10_sum / colData(sce)$log10_detected
 
 #' 
-#' Add QC metrics.
+#' ### Add per-feature QC
 #' 
-## ----add-qc-to-sce------------------------------------------------------------
-# 'calculateQCMetrics' is deprecated.
-#sce <- calculateQCMetrics(sce)
-#sce <- calculateQCMetrics(sce, feature_controls = list(MT = is.mito))
+## ----add-per-feature-qc-to-sce------------------------------------------------
+# "mean" - mean counts for each gene across all cells
+# "detected" - percentage of cells with non-zero counts for each gene
+sce <- addPerFeatureQC(sce)
 
-sce <- addQCMetrics(sce, list(MT = is.mito), pseudo = pseudocount) # pseudocount = 1
-sce
+# Add additional stats to per-feature QC
+rowData(sce)$is_MT <- FALSE
+rowData(sce)$is_MT[is.mito] <- TRUE
+rowData(sce)$log10_mean <- log10(rowData(sce)$mean + pseudocount)
+rowData(sce)$n_cells <- nexprs(sce, byrow = TRUE)                 # number of expressing cells
+rowData(sce)$fq_n_cells <- rowData(sce)$n_cells / ncol(sce) * 100 # percentage of expressing cells
+rowData(sce)$pct_dropout <- 100 - rowData(sce)$detected	# percentage of cells with zero counts
+rowData(sce)$total_counts <- rowData(sce)$mean * ncol(sce)
+rowData(sce)$log10_total_counts <- log10(rowData(sce)$total_counts + pseudocount)
 
 #' 
 ## -----------------------------------------------------------------------------
+sce
+
 # Print column names from the gene and cell data
 names(colData(sce))
 names(rowData(sce))
