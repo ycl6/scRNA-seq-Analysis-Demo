@@ -325,9 +325,49 @@ names(colData(sce))
 names(rowData(sce))
 
 #' 
+#' # Identify low-quality cells
+#' 
+#' In most cases, We can assume most of the cells are  _high quality_ and use the median absolute deviation (MAD) from the median approach to identify cells that are outliers, presumably representing low-quality cells. The threshold used here to determined if a cell is an outlier is if it is __more than 3 MADs from the median__, under a normal distribution this cutoff will retain 99% of cells. The log-transformed values will be applied to the input values (with `log = TRUE`) as this improves resolution at small values for distribution exhibit a heavy right tail, and avoid inflation of the MAD that might compromise outlier detection on the left tail.
+#' 
+#' **Note:** One should be aware of factors that could affect the distribution, for example certain cells can have a high metabolic rate and thus higher mitochondrial gene expression, or certain cells can express very few genes. In such cases, one might need to use fixed thresholds to filter low-quality cells.
+#' 
+## ----run-isOutlier------------------------------------------------------------
+qc.lib <- isOutlier(colData(sce)$sum, nmads = 3, log = TRUE, type = "lower")
+qc.expr <- isOutlier(colData(sce)$detected, nmads = 3, log = TRUE, type = "lower")
+qc.mito <- isOutlier(colData(sce)$subsets_MT_percent, nmads = 3, type = "higher")
+
+#' 
+#' View the filter thresholds and determine if they are appropriate.
+#' 
+## ----show-thresholds----------------------------------------------------------
+attr(qc.lib, "thresholds")  # values lower than the "lower" threshold would be filtered
+attr(qc.expr, "thresholds") # values lower than the "lower" threshold would be filtered
+attr(qc.mito, "thresholds") # values higher than the "higher" threshold would be filtered
+
+#' 
+#' **Note:** The `qc.mito` threshold is very low, i.e. it will remove cells with mitochondrial proportions greater than ~1.63%. So in this case, we will set a fixed threshold of 10%.
+#' 
+## ----set-fixed-mito-threshold-------------------------------------------------
+qc.mito.threshold = 10 # set at 10%
+qc.mito <- colData(sce)$subsets_MT_percent > qc.mito.threshold
+attr(qc.mito, "thresholds")["lower"] <- -Inf
+attr(qc.mito, "thresholds")["higher"] <- qc.mito.threshold
+
+attr(qc.mito, "thresholds")
+
+#' 
+#' Summarize the number of cells removed for each reason.
+#' 
+## ----discard-summary----------------------------------------------------------
+discard <- qc.lib | qc.expr | qc.mito
+colData(sce)$discard <- discard	# Add a column in colData to store QC filter result
+DataFrame(LibSize = sum(qc.lib), ExprGene = sum(qc.expr), MitoProp = sum(qc.mito), 
+	  Total = sum(discard))
+
+#' 
 #' # Assess QC metrics on cells
 #' 
-#' Now we are ready to explore the various metrics with visualizations. Afer assessing, we can decide which cells are of low quality and should be removed before continue with downstream analysis.
+#' Now we are ready to inspect the distributions of various metrics and the thresholds chosen earlier. In an ideal case, we will see these metrics follow normal distributions and thus would justify the 3 MAD thresholds used in outlier detection. Afer assessing the plots, we can decide if the thresholds need adjustment to account for specific biological states or subset of cells, etc.
 #' 
 #' ## Cell counts
 #' 
@@ -365,18 +405,20 @@ loglab = scales::trans_format("log10", scales::math_format(10^.x))
 
 # histogram
 p1 <- ggplot(as.data.frame(colData(sce)), aes(sum, color = Sample, fill = Sample)) +
-	geom_histogram(position = "identity", alpha = 0.4) + 
+	geom_histogram(position = "identity", alpha = 0.4, bins = 50) +
 	scale_x_log10(breaks = logbreak, labels = loglab) +
+	geom_vline(xintercept = attr(qc.lib, "thresholds")[1], linetype = 2) + # show cutoff
 	scale_fill_manual(values = sample_col) + scale_color_manual(values = sample_col) +
-	theme_classic(base_size = 12) + xlab("Total UMI counts (log scale)") + 
+	theme_classic(base_size = 12) + xlab("log10 Total UMI counts") + 
 	ylab("Frequency") + ggtitle("Histogram of Library Size per Cell")
 
 # violin plot
-p2 <- ggplot(as.data.frame(colData(sce)), aes(Sample, sum, colour = Sample)) +
+p2 <- ggplot(as.data.frame(colData(sce)), aes(Sample, sum, colour = discard)) +
 	geom_violin(width = 1) + scale_y_log10(breaks = logbreak, labels = loglab) +
 	geom_quasirandom(size = 0.2, alpha = 0.2, width = 0.5) +
-	scale_color_manual(values = sample_col) + theme_classic(base_size = 12) +
-	theme(legend.position = "none") + ylab("Total UMI counts (log scale)") + 
+	geom_hline(yintercept = attr(qc.lib, "thresholds")[1], linetype = 2) + # show cutoff
+	scale_color_manual(values = c("blue", "red")) + theme_classic(base_size = 12) +
+	theme(legend.position = "right") + ylab("log10 Total UMI counts") + 
 	ggtitle("Violin plot of Library Size perl Cell")
 
 multiplot(p1, p2)
@@ -397,18 +439,20 @@ quantile(colData(sce)$detected, seq(0, 1, 0.1))
 ## ----plot-expressed-gene, message = FALSE, fig.width = 8, fig.height = 10, fig.align = "center", dpi = 100----
 # histogram
 p1 <- ggplot(as.data.frame(colData(sce)), aes(detected, color = Sample, fill = Sample)) +
-	geom_histogram(position = "identity", alpha = 0.4) + 
+	geom_histogram(position = "identity", alpha = 0.4, bins = 50) + 
 	scale_x_log10(breaks = logbreak, labels = loglab) +
+	geom_vline(xintercept = attr(qc.expr, "thresholds")[1], linetype = 2) + # show cutoff
 	scale_fill_manual(values = sample_col) + scale_color_manual(values = sample_col) +
-	theme_classic(base_size = 12) + xlab("Total expressed genes (log scale)") + 
+	theme_classic(base_size = 12) + xlab("log10 Total expressed genes") + 
 	ylab("Frequency") + ggtitle("Histogram of Expressed Features per Cell")
 
 # violin
-p2 <- ggplot(as.data.frame(colData(sce)), aes(Sample, detected, colour = Sample)) +
+p2 <- ggplot(as.data.frame(colData(sce)), aes(Sample, detected, colour = discard)) +
 	geom_violin(width = 1) + scale_y_log10(breaks = logbreak, labels = loglab) +
 	geom_quasirandom(size = 0.2, alpha = 0.2, width = 0.5) +
-	scale_colour_manual(values = sample_col) + theme_classic(base_size = 12) +
-	theme(legend.position = "none") + ylab("Total expressed genes (log scale)") + 
+	geom_hline(yintercept = attr(qc.expr, "thresholds")[1], linetype = 2) + # show cutoff
+	scale_colour_manual(values = c("blue", "red")) + theme_classic(base_size = 12) +
+	theme(legend.position = "right") + ylab("log10 Total expressed genes") + 
 	ggtitle("Violin plot of Expressed Features per Cell")
 
 multiplot(p1, p2)
@@ -430,19 +474,18 @@ quantile(colData(sce)$log10_genes_per_umi, seq(0, 1, 0.1))
 # histogram
 p1 <- ggplot(as.data.frame(colData(sce)), aes(log10_genes_per_umi, color = Sample,
                                               fill = Sample)) +
-        geom_histogram(position = "identity", alpha = 0.4) +
+        geom_histogram(position = "identity", alpha = 0.4, bins = 50) + 
+	geom_vline(xintercept = 0.8, linetype = 2) +
         scale_fill_manual(values = sample_col) + scale_color_manual(values = sample_col) +
         theme_classic(base_size = 12) + xlab("log10 Gene per UMI") + ylab("Frequency") +
         ggtitle("Histogram of Complexity of Gene Expression")
 
 # scatter plot
-p2 <- ggplot(as.data.frame(colData(sce)), aes(sum, detected, color = Sample)) + 
+p2 <- ggplot(as.data.frame(colData(sce)), aes(log10_sum, log10_detected, color = Sample)) + 
 	geom_point(size = 0.6, alpha = 0.3) + facet_wrap(~ as.data.frame(colData(sce))$Sample) + 
-	scale_x_log10(breaks = logbreak, labels = loglab) +
-	scale_y_log10(breaks = logbreak, labels = loglab) +
 	scale_color_manual(values = sample_col) + theme_classic(base_size = 12) +
 	guides(color = guide_legend("Sample", override.aes = list(size = 3, alpha = 1))) +
-	xlab("Total UMI counts (log scale)") + ylab("Total expressed genes (log scale)") + 
+	xlab("log10 Total UMI counts") + ylab("log10 Total expressed genes") + 
 	ggtitle("UMIs vs. Expressed Genes")
 
 multiplot(p1, p2)
@@ -466,23 +509,19 @@ quantile(colData(sce)$subsets_MT_percent, seq(0, 1, 0.1))
 # histogram
 p1 <- ggplot(as.data.frame(colData(sce)), aes(x = subsets_MT_percent, color = Sample, 
 					       fill = Sample)) +
-	geom_histogram(position = "identity", alpha = 0.4) +
+	geom_histogram(position = "identity", alpha = 0.4, bins = 50) +
+	geom_vline(xintercept = attr(qc.mito, "thresholds")[2], linetype = 2) + # show cutoff
 	scale_fill_manual(values = sample_col) + scale_color_manual(values = sample_col) +
 	theme_classic(base_size = 12) + xlab("% counts from mitochondrial genes") + 
 	ylab("Frequency") + ggtitle("Histogram of Mitochondrial Proportions per Cell")
 
-# scatter plot
-p2 <- ggplot(as.data.frame(colData(sce)), aes(sum, detected, color = subsets_MT_percent, 
-					      size = subsets_MT_sum)) +
-	geom_point(alpha = 0.3) + facet_wrap(~ as.data.frame(colData(sce))$Sample) +
-	scale_x_log10(breaks = logbreak, labels = loglab) +
-	scale_y_log10(breaks = logbreak, labels = loglab) + 
-	scale_color_gradientn(colours = rainbow(5)) + scale_size_continuous(range = c(1, 5)) + 
-	theme_classic(base_size = 12) + 
-	guides(color = guide_legend("MT Pct", override.aes = list(size = 3, alpha = 1)), 
-	       size = guide_legend("MT Sum")) +
-	xlab("Total UMI counts (log scale)") + ylab("Total expressed genes (log scale)") +
-	ggtitle("UMIs vs. Expressed Genes")
+# violin
+p2 <- ggplot(as.data.frame(colData(sce)), aes(Sample, subsets_MT_percent, colour = discard)) +
+        geom_violin(width = 1) + geom_quasirandom(size = 0.2, alpha = 0.2, width = 0.5) +
+        geom_hline(yintercept = attr(qc.mito, "thresholds")[2], linetype = 2) + # show cutoff
+        scale_colour_manual(values = c("blue", "red")) + theme_classic(base_size = 12) +
+        theme(legend.position = "right") + ylab("% counts from mitochondrial genes") +
+        ggtitle("Violin plot of Mitochondrial Proportions per Cell")
 
 multiplot(p1, p2)
 
