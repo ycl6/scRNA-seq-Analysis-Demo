@@ -53,6 +53,7 @@
 suppressPackageStartupMessages({
 	library(scRNAseq)
 	library(scater)
+	library(DropletUtils)
 	library(ggbeeswarm) # geom_quasirandom
 })
 
@@ -101,8 +102,11 @@ pie(rep(1,30), col = c30, radius = 1)
 # Choosing colours for samples, n = 8
 sample_col <- c30[c(1:8)]
 
-# Choosing colours for samples, n = 15
+# Choosing colours for clutsers, n = 15
 cluster_col <- c30[c(1:15)]
+
+# Choosing colours for Venn diagram, n = 3
+circle.col <- c30[c(23,24,27)]
 
 #' 
 #' # Load scRNA-seq data
@@ -218,54 +222,6 @@ sample_id <- c("Sample1", "Sample2", "Sample3", "Sample4")
 ## str(rowData(sce))
 
 #' 
-#' ## Add average expression
-#' 
-#' We use the `calculateAverage` function to average counts per feature after normalizing with size factors
-#' 
-## -----------------------------------------------------------------------------
-# 'calcAverage' is deprecated.
-ave <- calculateAverage(sce)
-rowData(sce)$ave_counts <- ave
-
-#' 
-#' ## Add log2 CPM to `sce`
-#' 
-#' In addition to the count data in `assays`, we will also add the log2 normalised count-per-million (CPM) values using `exprs`.
-#' 
-## ----assay-data---------------------------------------------------------------
-# Assay info
-str(assays(sce))
-
-# Accessing the assay data
-dim(assay(sce, "counts"))
-
-#' 
-#' > **Note:** The `use_size_factors` parameter in `calculateCPM` is deprecated, use `size_factors` instead. The default of the `size_factors` parameter is `NULL`, and this will use library sizes directly.
-#' 
-#' > **Note:** A pseudocount of **1** is added to avoid undefined values after the log-transformation.
-#' 
-#' ```
-#' # More about lib.sizes calculation in calculateCPM()
-#' # x is a numeric matrix of counts
-#' x <- assay(sce, "counts")
-#' size.factors <- colSums(x)/mean(colSums(x)) 	# same as scater::librarySizeFactors(x)
-#' lib.sizes <- colSums(x) / 1e6               	# count-per-million
-#' lib.sizes <- size.factors / mean(size.factors) * mean(lib.sizes) # normalisation
-#' ```
-#' 
-#' Add log2 CPM.
-#' 
-## ----add-log2cpm--------------------------------------------------------------
-pseudocount = 1
-exprs(sce) <- log2(calculateCPM(sce) + pseudocount) # See note
-
-#' 
-#' Print object info.
-#' 
-## -----------------------------------------------------------------------------
-sce
-
-#' 
 #' # Generate QC metrics
 #' 
 #' ## Define mitochondrial genes
@@ -288,12 +244,15 @@ rowData(sce)$Symbol[is.mito]
 #' 
 #' ### Add per-cell QC
 #' 
+#' > **Note:** A pseudocount of **1** is added to avoid undefined values after the log-transformation.
+#' 
 ## ----add-per-cell-qc-to-sce---------------------------------------------------
 # "sum" - sum of counts for the cell (library size)
 # "detected" - number of genes for the cell that have counts above the detection limit (default 0)
 sce <- addPerCellQC(sce, list(MT = is.mito))
 
 # Add additional stats to per-cell QC
+pseudocount = 1
 colData(sce)$log10_sum <- log10(colData(sce)$sum + pseudocount)
 colData(sce)$log10_detected <- log10(colData(sce)$detected + pseudocount)
 colData(sce)$log10_genes_per_umi <- colData(sce)$log10_sum / colData(sce)$log10_detected
@@ -303,26 +262,20 @@ colData(sce)$log10_genes_per_umi <- colData(sce)$log10_sum / colData(sce)$log10_
 #' 
 ## ----add-per-feature-qc-to-sce------------------------------------------------
 # "mean" - mean counts for each gene across all cells
-# "detected" - percentage of cells with non-zero counts for each gene
+# "detected" - percentage of expressing cells, i.e.cells with non-zero counts for each gene
 sce <- addPerFeatureQC(sce)
 
-# Add additional stats to per-feature QC
-rowData(sce)$is_MT <- FALSE
-rowData(sce)$is_MT[is.mito] <- TRUE
-rowData(sce)$log10_mean <- log10(rowData(sce)$mean + pseudocount)
-rowData(sce)$n_cells <- nexprs(sce, byrow = TRUE)                 # number of expressing cells
-rowData(sce)$fq_n_cells <- rowData(sce)$n_cells / ncol(sce) * 100 # percentage of expressing cells
-rowData(sce)$pct_dropout <- 100 - rowData(sce)$detected	# percentage of cells with zero counts
-rowData(sce)$total_counts <- rowData(sce)$mean * ncol(sce)
-rowData(sce)$log10_total_counts <- log10(rowData(sce)$total_counts + pseudocount)
-
 #' 
-## -----------------------------------------------------------------------------
+## ----print-sce----------------------------------------------------------------
 sce
 
-# Print column names from the gene and cell data
+# Cell data
 names(colData(sce))
+colData(sce)
+
+# Gene data
 names(rowData(sce))
+rowData(sce)
 
 #' 
 #' # Identify low-quality cells
@@ -345,7 +298,7 @@ attr(qc.expr, "thresholds") # values lower than the "lower" threshold would be f
 attr(qc.mito, "thresholds") # values higher than the "higher" threshold would be filtered
 
 #' 
-#' **Note:** The `qc.mito` threshold is very low, i.e. it will remove cells with mitochondrial proportions greater than ~1.63%. So in this case, we will set a fixed threshold of 10%.
+#' **Note:** The `qc.mito` threshold is very low, i.e. it will remove cells with mitochondrial proportions greater than ~1.63%. Usually cells with less than 10% are considered good quality and more than 20% are of poor quality. In this case, we will manually set a fixed threshold of 10%.
 #' 
 ## ----set-fixed-mito-threshold-------------------------------------------------
 qc.mito.threshold = 10 # set at 10%
@@ -356,13 +309,17 @@ attr(qc.mito, "thresholds")["higher"] <- qc.mito.threshold
 attr(qc.mito, "thresholds")
 
 #' 
-#' Summarize the number of cells removed for each reason.
+#' Summarize the number of cells removed for each reason. In this example, all cells passed the thresholds and none are considered an outlier.
 #' 
 ## ----discard-summary----------------------------------------------------------
 discard <- qc.lib | qc.expr | qc.mito
 colData(sce)$discard <- discard	# Add a column in colData to store QC filter result
 DataFrame(LibSize = sum(qc.lib), ExprGene = sum(qc.expr), MitoProp = sum(qc.mito), 
 	  Total = sum(discard))
+
+# Show as Venn diagram
+limma::vennDiagram(data.frame(LibSize = qc.lib, ExprGene = qc.expr, MitoProp = qc.mito),
+		   circle.col = circle.col)
 
 #' 
 #' # Assess QC metrics on cells
@@ -409,7 +366,7 @@ p1 <- ggplot(as.data.frame(colData(sce)), aes(sum, color = Sample, fill = Sample
 	scale_x_log10(breaks = logbreak, labels = loglab) +
 	geom_vline(xintercept = attr(qc.lib, "thresholds")[1], linetype = 2) + # show cutoff
 	scale_fill_manual(values = sample_col) + scale_color_manual(values = sample_col) +
-	theme_classic(base_size = 12) + xlab("log10 Total UMI counts") + 
+	theme_classic(base_size = 12) + xlab("Total UMI counts") + 
 	ylab("Frequency") + ggtitle("Histogram of Library Size per Cell")
 
 # violin plot
@@ -418,7 +375,8 @@ p2 <- ggplot(as.data.frame(colData(sce)), aes(Sample, sum, colour = discard)) +
 	geom_quasirandom(size = 0.2, alpha = 0.2, width = 0.5) +
 	geom_hline(yintercept = attr(qc.lib, "thresholds")[1], linetype = 2) + # show cutoff
 	scale_color_manual(values = c("blue", "red")) + theme_classic(base_size = 12) +
-	theme(legend.position = "right") + ylab("log10 Total UMI counts") + 
+	guides(color = guide_legend("Discard", override.aes = list(size = 1, alpha = 1))) +
+	theme(legend.position = "right") + ylab("Total UMI counts") + 
 	ggtitle("Violin plot of Library Size perl Cell")
 
 multiplot(p1, p2)
@@ -443,7 +401,7 @@ p1 <- ggplot(as.data.frame(colData(sce)), aes(detected, color = Sample, fill = S
 	scale_x_log10(breaks = logbreak, labels = loglab) +
 	geom_vline(xintercept = attr(qc.expr, "thresholds")[1], linetype = 2) + # show cutoff
 	scale_fill_manual(values = sample_col) + scale_color_manual(values = sample_col) +
-	theme_classic(base_size = 12) + xlab("log10 Total expressed genes") + 
+	theme_classic(base_size = 12) + xlab("Total expressed genes") + 
 	ylab("Frequency") + ggtitle("Histogram of Expressed Features per Cell")
 
 # violin
@@ -452,7 +410,8 @@ p2 <- ggplot(as.data.frame(colData(sce)), aes(Sample, detected, colour = discard
 	geom_quasirandom(size = 0.2, alpha = 0.2, width = 0.5) +
 	geom_hline(yintercept = attr(qc.expr, "thresholds")[1], linetype = 2) + # show cutoff
 	scale_colour_manual(values = c("blue", "red")) + theme_classic(base_size = 12) +
-	theme(legend.position = "right") + ylab("log10 Total expressed genes") + 
+	guides(color = guide_legend("Discard", override.aes = list(size = 1, alpha = 1))) +
+	theme(legend.position = "right") + ylab("Total expressed genes") + 
 	ggtitle("Violin plot of Expressed Features per Cell")
 
 multiplot(p1, p2)
@@ -481,11 +440,13 @@ p1 <- ggplot(as.data.frame(colData(sce)), aes(log10_genes_per_umi, color = Sampl
         ggtitle("Histogram of Complexity of Gene Expression")
 
 # scatter plot
-p2 <- ggplot(as.data.frame(colData(sce)), aes(log10_sum, log10_detected, color = Sample)) + 
+p2 <- ggplot(as.data.frame(colData(sce)), aes(sum, detected, color = Sample)) + 
+	scale_x_log10(breaks = logbreak, labels = loglab) +
+	scale_y_log10(breaks = logbreak, labels = loglab) +
 	geom_point(size = 0.6, alpha = 0.3) + facet_wrap(~ as.data.frame(colData(sce))$Sample) + 
 	scale_color_manual(values = sample_col) + theme_classic(base_size = 12) +
 	guides(color = guide_legend("Sample", override.aes = list(size = 3, alpha = 1))) +
-	xlab("log10 Total UMI counts") + ylab("log10 Total expressed genes") + 
+	xlab("Total UMI counts") + ylab("Total expressed genes") + 
 	ggtitle("UMIs vs. Expressed Genes")
 
 multiplot(p1, p2)
@@ -520,10 +481,214 @@ p2 <- ggplot(as.data.frame(colData(sce)), aes(Sample, subsets_MT_percent, colour
         geom_violin(width = 1) + geom_quasirandom(size = 0.2, alpha = 0.2, width = 0.5) +
         geom_hline(yintercept = attr(qc.mito, "thresholds")[2], linetype = 2) + # show cutoff
         scale_colour_manual(values = c("blue", "red")) + theme_classic(base_size = 12) +
+	guides(color = guide_legend("Discard", override.aes = list(size = 1, alpha = 1))) +
         theme(legend.position = "right") + ylab("% counts from mitochondrial genes") +
         ggtitle("Violin plot of Mitochondrial Proportions per Cell")
 
 multiplot(p1, p2)
+
+#' 
+#' # Cell filtering
+#' 
+#' After reviewing the diagnostic plots, we will proceed with removing low-quality cells from `sce` with the thresholds that were selected in [Identify low-quality cells]. You can also change the thresholds that is suitable for your study to prevent removing biologically relevant cells.
+#' 
+#' ## Remove outlier cells
+#' 
+#' In this example, none of the cells are outliers, and hence none were removed.
+#' 
+## ----cell-filtering-----------------------------------------------------------
+sce.filt <- sce[, !discard]
+sce.filt
+
+#' 
+#' ## Update per-feature QC
+#' 
+#' Because poor-quality cells were removed, we will update the per-feature QC metrics whereby some calculations uses cell data.
+#' 
+## ----update-per-feature-qc-to-sce.filt----------------------------------------
+rowData(sce.filt) <- cbind(rowData(sce.filt)[,c("Ensembl", "Symbol")], 
+			   perFeatureQCMetrics(sce.filt))
+
+# Add additional stats to per-feature QC
+rowData(sce.filt)$n_cells <- rowData(sce.filt)$detected/100 * ncol(sce.filt) # number of expressing cells
+rowData(sce.filt)$pct_dropout <- 100 - rowData(sce.filt)$detected # percentage of cells with zero counts
+rowData(sce.filt)$total_counts <- rowData(sce.filt)$mean * ncol(sce.filt)
+
+#' 
+#' # Assess QC metrics on features
+#' 
+#' Show number of genes that are not expressed in any cell.
+#' 
+## ----show-dropout-------------------------------------------------------------
+not.expressed <- rowData(sce.filt)$n_cells == 0
+table(not.expressed)
+
+#' 
+#' We remove genes that are not expressed in any cell
+#' 
+## ----remove-dropout-----------------------------------------------------------
+sce.filt <- sce.filt[!not.expressed,]
+sce.filt
+
+#' 
+#' Aside from the 6858 genes that are not expressed in any cell, there are also genes that have extremely low average expression across all cells. We can also observe a positive relationship between the number of of expressing cells versus mean counts of all the genes in the expression matrix.
+#' 
+## ----plot-pct_dropout, message = FALSE, fig.width = 8, fig.height = 10, fig.align = "center", dpi = 100----
+# histogram
+p1 <- ggplot(as.data.frame(rowData(sce.filt)), aes(x = mean)) +
+	geom_histogram(position = "identity", bins = 100, fill = "white", color = "black") +
+	scale_x_log10(breaks = logbreak, labels = loglab) +
+	geom_vline(xintercept = 0.005, linetype = 2, color = "cyan") +	# mean count = 0.005
+	geom_vline(xintercept = 0.010, linetype = 2, color = "blue") +	# mean count = 0.010
+	geom_vline(xintercept = 0.020, linetype = 2, color = "red") +	# mean count = 0.020
+	theme_classic(base_size = 12) + xlab("Mean counts") +
+	ylab("Frequency") + ggtitle("Histogram of Mean Counts")
+
+# scatter plot
+p2 <- ggplot(as.data.frame(rowData(sce.filt)), aes(n_cells, mean, color = pct_dropout)) + 
+	geom_point(size = 0.6, alpha = 0.3) + theme_classic(base_size = 12) + 
+	scale_x_log10(breaks = logbreak, labels = loglab) + 
+	scale_y_log10(breaks = logbreak, labels = loglab) +
+	geom_hline(yintercept = 0.005, linetype = 2, color = "cyan") +
+	geom_hline(yintercept = 0.010, linetype = 2, color = "blue") +
+	geom_hline(yintercept = 0.020, linetype = 2, color = "red") +
+	guides(color = guide_legend("Pct Dropouts", override.aes = list(size = 3, alpha = 1))) + 
+	xlab("Number of expressing cells") + ylab("Mean counts") + 
+	ggtitle("Expressing Cells vs. Mean Counts")
+
+multiplot(p1, p2)
+
+#' 
+#' # Feature filtering
+#' 
+#' ## Compare filtering methods
+#' 
+#' After assessing the QC metrics on features, we can proceeed to remove genes that is considered "undetectable". This can be done by define a gene as detectable if the average expression is above a certain threshold, or a `N` number of cells expressing `X` number of the transcript.
+#' 
+## ----comparison-feature-filtering-methods-------------------------------------
+# Average expression more than 0.02
+qc.gene1 <- rowData(sce.filt)$mean > 0.02
+
+# 2 transcript detected in at least 0.1% of total cells
+ncell <- ncol(sce.filt) * 0.001
+ncell
+qc.gene2 <- nexprs(sce.filt, byrow = TRUE, detection_limit = 2) >= ncell
+
+x = data.frame(n_cells = rowData(sce.filt)$n_cells, mean = rowData(sce.filt)$mean, 
+	       qc1 = qc.gene1, qc2 = qc.gene2)
+x$cond = paste0(x$qc1, x$qc2)
+x$cond = as.factor(x$cond)
+levels(x$cond) = c("Failed (Both)", "Failed (mean)", "Failed (nexprs)", "Pass")
+
+table(x$cond)
+
+# Show as Venn diagram
+limma::vennDiagram(data.frame(MeanExpr = qc.gene1, kOverA = qc.gene2),
+                   circle.col = c("blue", "red"), main = "Detectable Genes")
+
+#' 
+## ----plot-feature-filtering, message = FALSE, fig.width = 8, fig.height = 10, fig.align = "center", dpi = 100----
+# scatter plots
+p3 <- ggplot(x, aes(n_cells, mean, color = cond)) + 
+	geom_point(size = 0.6, alpha = 0.3) + theme_classic(base_size = 12) +
+        scale_x_log10(breaks = logbreak, labels = loglab) +
+        scale_y_log10(breaks = logbreak, labels = loglab) +
+	geom_hline(yintercept = 0.02, linetype = 2, color = "blue") + # mean count = 0.005
+        guides(color = guide_legend("Feature Status", override.aes = list(size = 3, alpha = 1))) +
+        xlab("Number of expressing cells") + ylab("Mean counts") +
+        ggtitle("Expressing Cells vs. Mean Counts")
+
+p4 <- ggplot(x, aes(n_cells, mean, color = cond)) + geom_point(size = 0.6, alpha = 0.3) + 
+	facet_wrap(~ cond) + theme_classic(base_size = 12) + 
+	scale_x_log10(breaks = logbreak, labels = loglab) +
+	scale_y_log10(breaks = logbreak, labels = loglab) +
+	geom_hline(yintercept = 0.02, linetype = 2, color = "blue") + # mean count = 0.005
+	guides(color = guide_legend("Feature Status", override.aes = list(size = 3, alpha = 1))) +
+	xlab("Number of expressing cells") + ylab("Mean counts") +
+	ggtitle("Expressing Cells vs. Mean Counts")
+
+multiplot(p3, p4)
+
+#' 
+#' ## Remove lowly-expressed genes
+#' 
+#' Here we will use the classical `kOverA` approach to select genes that can be detected (2 transcripts) in at least 0.1% of total cells.
+#' 
+## ----feature-filtering--------------------------------------------------------
+sce.filt <- sce.filt[qc.gene2,]
+sce.filt
+
+#' 
+#' ## Update per-cell QC
+#' 
+#' Because lowly-expressed genes were removed, we will update the per-cell QC metrics whereby some calculations uses gene data.
+#' 
+## ----add-per-cell-qc-to-sce.filt----------------------------------------------
+colData(sce.filt) <- cbind(colData(sce.filt)[,c("Barcode","Sample","Condition")], 
+			   perCellQCMetrics(sce.filt, list(MT = grep("^mt-|^MT-", rowData(sce.filt)$Symbol))))
+
+#' 
+#' ## Add average expression
+#' 
+#' Use the `calculateAverage` function to average counts per feature after normalizing with size factors.
+#' 
+## ----plot-average-counts, message = FALSE, fig.width = 6, fig.height = 6, fig.align = "center", dpi = 100----
+rowData(sce.filt)$ave_counts <- calculateAverage(sce.filt)
+
+r.squared = summary(lm(mean ~ ave_counts, rowData(sce.filt)))$r.squared
+r.squared = as.expression(bquote(R^2 == .(round(r.squared, 4))))
+
+ggplot(as.data.frame(rowData(sce.filt)), aes(mean, ave_counts)) + 
+	geom_point(size = 0.6, alpha = 0.3) + theme_classic(base_size = 12) + 
+	scale_x_log10(breaks = logbreak, labels = loglab) + 
+	scale_y_log10(breaks = logbreak, labels = loglab) + 
+	geom_smooth(method = "lm", se = FALSE) + 
+	annotate("text", label = r.squared, x = 0.1, y = 100, size = 4) +
+	xlab("Mean counts") + ylab("Size-adjusted average count") + 
+	ggtitle("Mean Counts vs. Size-adjusted Average Count")
+
+#' 
+#' # Add log2 counts to `sce.filt`
+#' 
+#' In addition to the count data in `assays`, we will also add the log2-transformed counts to `assays`.
+#' 
+## ----show-assay-counts--------------------------------------------------------
+# Accessing the assay data
+dim(assay(sce.filt, "counts"))
+
+#' 
+#' ## log2 raw counts
+#' 
+## ----add-log2-raw-counts------------------------------------------------------
+assay(sce.filt, "logcounts") <- log2(counts(sce.filt) + pseudocount)
+
+#' 
+#' ## log2 count-per-million (CPM)
+#' 
+#' The effective library sizes are used as the denominator of the CPM calculation.
+#' 
+#' ```
+#' # More about lib.sizes calculation in calculateCPM()
+#' # x is a numeric matrix of counts
+#' x <- assay(sce, "counts")
+#' size.factors <- colSums(x)/mean(colSums(x))     # same as scater::librarySizeFactors(x)
+#' lib.sizes <- colSums(x) / 1e6                   # count-per-million
+#' lib.sizes <- size.factors / mean(size.factors) * mean(lib.sizes) # normalisation
+#' ```
+#' 
+## ----add-log2-cpm-------------------------------------------------------------
+assay(sce.filt, "logcpm") <- log2(calculateCPM(sce.filt) + pseudocount)
+
+#' 
+## ----show-assays--------------------------------------------------------------
+# Assay info
+str(assays(sce.filt))
+
+#' 
+#' # Save data
+#' 
+## ----save-image---------------------------------------------------------------
+save.image("BachMammary.RData")
 
 #' 
 #' # Session information
