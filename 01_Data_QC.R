@@ -53,7 +53,6 @@
 suppressPackageStartupMessages({
 	library(scRNAseq)
 	library(scater)
-	library(DropletUtils)
 	library(ggbeeswarm) # geom_quasirandom
 })
 
@@ -255,7 +254,7 @@ sce <- addPerCellQC(sce, list(MT = is.mito))
 pseudocount = 1
 colData(sce)$log10_sum <- log10(colData(sce)$sum + pseudocount)
 colData(sce)$log10_detected <- log10(colData(sce)$detected + pseudocount)
-colData(sce)$log10_genes_per_umi <- colData(sce)$log10_sum / colData(sce)$log10_detected
+colData(sce)$log10_genes_per_umi <- colData(sce)$log10_detected / colData(sce)$log10_sum
 
 #' 
 #' ### Add per-feature QC
